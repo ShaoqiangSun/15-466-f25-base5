@@ -76,6 +76,9 @@ bool Player::Controls::recv_controls_message(Connection *connection_) {
 //-----------------------------------------
 
 Game::Game() : mt(0x15466666) {
+	spotlight.pos = glm::vec3(0.0f, 0.0f, 5.0f); 
+	game_state = GameState::BeforeStart;
+	
 }
 
 Player *Game::spawn_player() {
@@ -83,8 +86,8 @@ Player *Game::spawn_player() {
 	Player &player = players.back();
 
 	//random point in the middle area of the arena:
-	player.position.x = glm::mix(ArenaMin.x + 2.0f * PlayerRadius, ArenaMax.x - 2.0f * PlayerRadius, 0.4f + 0.2f * mt() / float(mt.max()));
-	player.position.y = glm::mix(ArenaMin.y + 2.0f * PlayerRadius, ArenaMax.y - 2.0f * PlayerRadius, 0.4f + 0.2f * mt() / float(mt.max()));
+	player.position.x = glm::mix(ArenaMin.x, ArenaMax.x, 0.1f + 0.8f * mt() / float(mt.max()));
+	player.position.y = glm::mix(ArenaMin.y, ArenaMax.y, 0.1f + 0.8f * mt() / float(mt.max()));
 
 	do {
 		player.color.r = mt() / float(mt.max());
@@ -95,6 +98,13 @@ Player *Game::spawn_player() {
 
 	player.name = "Player " + std::to_string(next_player_number++);
 
+	player.role = players.size() == 1 ? Player::Role::Seeker : Player::Role::Hider;
+	hider_count = players.size() == 0 ? 0 : players.size() - 1;
+	player.is_ready = false;
+	player.player_id = current_player_id;
+	current_player_id++;
+	player.is_caught = false;
+	
 	return &player;
 }
 
@@ -111,6 +121,43 @@ void Game::remove_player(Player *player) {
 }
 
 void Game::update(float elapsed) {
+	if (game_state == GameState::SeekerWin || game_state == GameState::HiderWin) {
+		return;
+	}
+
+	if (game_state == GameState::BeforeStart) {
+		all_is_ready = (players.size() >= 2);
+
+		for (auto &p : players) {
+			if (p.controls.jump.downs > 0) {
+				p.is_ready = true;
+			}
+			
+		}
+
+	}
+
+	for (auto &p : players) {
+		all_is_ready &= p.is_ready;
+	}
+
+	if (all_is_ready) {	
+		game_state = GameState::Playing;
+	}
+
+	if (game_state == GameState::Playing) {
+		timer -= elapsed;
+		if (timer <= 0.0f) {
+			game_state = GameState::HiderWin;
+			return;
+		}
+
+		if (caught_hider_count >= hider_count) {
+			game_state = GameState::SeekerWin;
+			return;
+		}
+	}
+
 	//position/velocity update:
 	for (auto &p : players) {
 		glm::vec2 dir = glm::vec2(0.0f, 0.0f);
@@ -141,7 +188,8 @@ void Game::update(float elapsed) {
 
 			p.velocity = dir * along + glm::vec2(-dir.y, dir.x) * perp;
 		}
-		p.position += p.velocity * elapsed;
+		if (p.role == Player::Role::Seeker) p.position += 1.15f * p.velocity * elapsed;
+		else p.position += p.velocity * elapsed;
 
 		//reset 'downs' since controls have been handled:
 		p.controls.left.downs = 0;
@@ -151,15 +199,37 @@ void Game::update(float elapsed) {
 		p.controls.jump.downs = 0;
 	}
 
+	
+
 	//collision resolution:
 	for (auto &p1 : players) {
+		if (p1.is_caught) continue;
 		//player/player collisions:
 		for (auto &p2 : players) {
+			if (p2.is_caught) continue;
+
 			if (&p1 == &p2) break;
 			glm::vec2 p12 = p2.position - p1.position;
 			float len2 = glm::length2(p12);
 			if (len2 > (2.0f * PlayerRadius) * (2.0f * PlayerRadius)) continue;
 			if (len2 == 0.0f) continue;
+
+			if (game_state == GameState::Playing &&
+				((p1.role == Player::Role::Seeker && p2.role == Player::Role::Hider) ||
+				(p1.role == Player::Role::Hider && p2.role == Player::Role::Seeker))) 
+			{
+				caught_hider_count++;
+				if (p1.role == Player::Role::Hider) {
+					p1.is_caught = true;
+					continue;
+				}
+				else if (p2.role == Player::Role::Hider) {
+					p2.is_caught = true;
+					continue;
+				}
+
+			}
+
 			glm::vec2 dir = p12 / std::sqrt(len2);
 			//mirror velocity to be in separating direction:
 			glm::vec2 v12 = p2.velocity - p1.velocity;
@@ -167,6 +237,8 @@ void Game::update(float elapsed) {
 			p2.velocity += 0.5f * delta_v12;
 			p1.velocity -= 0.5f * delta_v12;
 		}
+		if (p1.is_caught) continue;
+
 		//player/arena collisions:
 		if (p1.position.x < ArenaMin.x + PlayerRadius) {
 			p1.position.x = ArenaMin.x + PlayerRadius;
@@ -186,6 +258,10 @@ void Game::update(float elapsed) {
 		}
 	}
 
+
+	angle += speed * elapsed;
+	spotlight.dir = glm::normalize(glm::vec3(1.3f * std::cos(angle), 1.3f * std::sin(angle), -1.0f));
+	
 }
 
 
@@ -206,12 +282,25 @@ void Game::send_state_message(Connection *connection_, Player *connection_player
 		connection.send(player.position);
 		connection.send(player.velocity);
 		connection.send(player.color);
-	
+		
+		connection.send(uint8_t(player.role));
+		connection.send(uint8_t(player.is_ready));
+		connection.send(player.player_id);
+		connection.send(uint8_t(player.is_caught));
+
 		//NOTE: can't just 'send(name)' because player.name is not plain-old-data type.
 		//effectively: truncates player name to 255 chars
 		uint8_t len = uint8_t(std::min< size_t >(255, player.name.size()));
 		connection.send(len);
 		connection.send_buffer.insert(connection.send_buffer.end(), player.name.begin(), player.name.begin() + len);
+	};
+
+	//send spotlight info helper:
+	auto send_spotlight = [&](Spotlight const &s) {
+		connection.send(s.pos);
+		connection.send(s.dir);
+    	connection.send(s.energy);
+		connection.send(s.cutoff);
 	};
 
 	//player count:
@@ -221,6 +310,11 @@ void Game::send_state_message(Connection *connection_, Player *connection_player
 		if (&player == connection_player) continue;
 		send_player(player);
 	}
+
+	
+	send_spotlight(spotlight);
+	connection.send(timer);
+	connection.send(uint8_t(game_state));
 
 	//compute the message size and patch into the message header:
 	uint32_t size = uint32_t(connection.send_buffer.size() - mark);
@@ -252,6 +346,14 @@ bool Game::recv_state_message(Connection *connection_) {
 		at += sizeof(*val);
 	};
 
+	//read spotlight info helper:
+	auto read_spotlight = [&]() {
+		read(&spotlight.pos);
+		read(&spotlight.dir);
+		read(&spotlight.energy);
+		read(&spotlight.cutoff);
+	};
+
 	players.clear();
 	uint8_t player_count;
 	read(&player_count);
@@ -261,6 +363,21 @@ bool Game::recv_state_message(Connection *connection_) {
 		read(&player.position);
 		read(&player.velocity);
 		read(&player.color);
+
+		uint8_t role;
+		read(&role);
+		player.role = Player::Role(role);
+
+		uint8_t ir;
+		read(&ir);
+		player.is_ready = (ir != 0);
+
+		read(&player.player_id);
+
+		uint8_t ic;
+		read(&ic);
+		player.is_caught = (ic != 0);
+
 		uint8_t name_len;
 		read(&name_len);
 		//n.b. would probably be more efficient to directly copy from recv_buffer, but I think this is clearer:
@@ -271,6 +388,15 @@ bool Game::recv_state_message(Connection *connection_) {
 			player.name += c;
 		}
 	}
+
+	
+	read_spotlight();
+	
+	read(&timer);
+
+	uint8_t gs;
+	read(&gs);
+	game_state = GameState(gs);
 
 	if (at != size) throw std::runtime_error("Trailing data in state message.");
 

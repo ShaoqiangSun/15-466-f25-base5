@@ -153,7 +153,7 @@ const client_names = [
 	maek.CPP('client.cpp'),
 	maek.CPP('PlayMode.cpp'),
 	maek.CPP('LitColorTextureProgram.cpp'),
-	//maek.CPP('ColorTextureProgram.cpp'),  //not used right now, but you might want it
+	maek.CPP('ColorTextureProgram.cpp'),  //not used right now, but you might want it
 	maek.CPP('Sound.cpp'),
 	maek.CPP('load_wav.cpp'),
 	maek.CPP('load_opus.cpp')
@@ -178,7 +178,8 @@ const common_names = [
 	maek.CPP('GL.cpp'),
 	maek.CPP('Load.cpp'),
 	maek.CPP('Connection.cpp'),
-	maek.CPP('hex_dump.cpp')
+	maek.CPP('hex_dump.cpp'),
+	maek.CPP('GlyphCache.cpp')
 ];
 
 const show_meshes_names = [
@@ -288,8 +289,8 @@ function init_maek() {
 		DEFAULT_OPTIONS.CPP = ['g++', '-std=c++20', '-Wall', '-Werror', '-g'];
 		DEFAULT_OPTIONS.LINK = ['g++', '-std=c++20', '-Wall', '-Werror', '-g'];
 	} else if (maek.OS === 'macos') {
-		DEFAULT_OPTIONS.CPP = ['clang++', '-std=c++20', '-Wall', '-Werror', '-g'];
-		DEFAULT_OPTIONS.LINK = ['clang++', '-std=c++20', '-Wall', '-Werror', '-g'];
+		DEFAULT_OPTIONS.CPP = ['clang++', '-std=c++20', '-Wall', '-g'];
+		DEFAULT_OPTIONS.LINK = ['clang++', '-std=c++20', '-Wall', '-g'];
 	}
 
 	//any settings here override 'DEFAULT_OPTIONS':
